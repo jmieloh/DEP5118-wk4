@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset='utf-8' />
+    <title>A Nation in Public Housing</title>
+    <meta name='viewport' content='initial-scale=1,maximum-scale=1,user-scalable=no' />
+    <link rel="icon" type="image/x-icon"
+        href="https://raw.githubusercontent.com/mapbox/assembly/publisher-staging/src/svgs/mapbox.svg">
+    <script src='https://api.tiles.mapbox.com/mapbox-gl-js/v3.30.0/mapbox-gl.js'></script>
+    <link href='https://api.tiles.mapbox.com/mapbox-gl-js/v3.30.0/mapbox-gl.css' rel='stylesheet' />
+    <script src="https://cdn.jsdelivr.net/npm/mapbox-gl-globe-minimap@1.2.0/dist/bundle.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Karla:wght@400;500;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --panel: rgba(252, 252, 250, .50);   /* container opacity — lower = more map */
+            --ink: #16181A;
+            --body: #33373A;
+            --muted: #7E848A;
+            --hair: rgba(22, 24, 26, .13);
+            --accent: #B4472A;
+
+            --card-w: clamp(620px, 56vw, 880px);
+            --card-h: clamp(140px, 19vh, 190px);
+            --card-h-img: clamp(260px, 24vh, 250px);
+            --intro-w: clamp(560px, 64vw, 1000px);
+            --intro-h: clamp(190px, 26vh, 270px);
+            --floor: 30px;
+            --ease: cubic-bezier(.22, .61, .36, 1);
+
+            /* halo used by anything sitting straight on the map */
+            --halo: 0 0 5px rgba(252, 252, 250, .98), 0 0 12px rgba(252, 252, 250, .9),
+                    0 0 24px rgba(252, 252, 250, .7);
+        }
+
+        * { box-sizing: border-box }
+
+        html, body { height: 100%; overflow: hidden }
+
+        body {
+            margin: 0;
+            font-family: 'Karla', system-ui, sans-serif;
+            font-size: 12.5px;
+            color: var(--body);
+        }
+
+        /* ---------- map ---------- */
+        #map { top: 0; height: 100vh; width: 100vw; position: fixed }
+
+        #mapInset {
+            bottom: 50px; right: 30px; height: 180px; width: 250px; max-width: 100%;
+            position: fixed; z-index: 1; opacity: 1;
+            transition: opacity .5s ease-in-out; pointer-events: none;
+        }
+        #mapInset .mapboxgl-ctrl-bottom-left { display: none }
+        @media (max-width: 500px) { #mapInset { display: none } }
+
+        /* ============ TRACK ============ */
+        #story {
+            position: fixed; inset: 0; z-index: 5;
+            display: flex;
+            overflow: hidden;
+            touch-action: pan-y;
+        }
+        #features { display: contents }
+
+        #header, .step { flex: 0 0 100%; display: flex }
+        #header { align-items: center; justify-content: center; padding: 0 6vw }
+        .step { align-items: flex-end; justify-content: flex-start; padding: 0 6vw var(--floor) 5vw }
+
+        .hidden { display: none }
+
+        /* ---------- panel ---------- */
+        .panel {
+            background: var(--panel);
+            -webkit-backdrop-filter: blur(16px) saturate(1.1);
+            backdrop-filter: blur(16px) saturate(1.1);
+            border: 1px solid var(--hair);
+            box-shadow: 0 8px 28px rgba(22, 24, 26, .10);
+            height: auto; min-height: var(--card-h); max-height: 34vh;
+            display: grid; grid-template-columns: minmax(118px, .62fr) 1fr 1fr;
+            column-gap: 22px; padding: 16px 20px;
+        }
+        .panel { position: relative }
+
+.collapse {
+    position: absolute; top: 8px; right: 8px; z-index: 4;
+    width: 20px; height: 20px; padding: 0;
+    border: 1px solid var(--hair); border-radius: 50%;
+    background: rgba(252, 252, 250, .92); color: var(--ink);
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    transition: transform .3s var(--ease), background .2s ease;
+}
+.collapse:hover { background: #fff }
+.collapse svg { width: 9px; height: 9px }
+
+.panel.collapsed .col,
+.panel.collapsed .imgs,
+.panel.collapsed .striparea { display: none }
+
+.panel.collapsed {
+    grid-template-columns: minmax(150px, 210px);
+    min-height: 0;
+}
+.step .panel.collapsed { width: auto }
+.panel.collapsed .collapse { transform: rotate(180deg) }
+
+        /* entrance — shared by every container type */
+        .panel, .sheetwrap {
+            opacity: 0; transform: translateX(30px);
+            transition: opacity 1.05s var(--ease), transform 1.05s var(--ease);
+        }
+        .active .panel, .active .sheetwrap { opacity: 1; transform: none; transition-delay: .12s }
+
+        .panel .left { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow-y: auto }
+        .panel .col { min-width: 0; overflow-y: auto; scrollbar-width: thin }
+        .panel .col::-webkit-scrollbar { width: 3px }
+        .panel .col::-webkit-scrollbar-thumb { background: var(--hair) }
+        .panel .colA { padding-left: 22px; border-left: 1px solid var(--hair) }
+        .panel .colB { padding-left: 0; border-left: 0 }
+        .panel.one-col { grid-template-columns: minmax(118px, .62fr) 1fr }
+
+        /* ---------- intro ---------- */
+        #header .panel {
+            background: rgb(252, 252, 250); 
+            width: var(--intro-w); min-height: var(--intro-h);
+            max-height: 82vh;                                   /* overrides .panel's 34vh cap */
+            grid-template-columns: minmax(260px, .8fr) 1.3fr;   /* wider rail = fewer title lines */
+            border-top: 3px solid var(--accent);
+        }
+        .eyebrow {
+            font-size: 9.5px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase;
+            color: var(--accent); margin: 0 0 12px;
+        }
+        /* headline — bumped up */
+        #header h1 {
+            font-family: 'Instrument Serif', Georgia, serif; font-weight: 400;
+            font-size: clamp(30px, 2.1vw, 30px); line-height: 1.14; letter-spacing: -.01em;
+            color: var(--ink); margin: 0 0 10px;
+        }
+        #header h2 { font-size: 11.5px; font-weight: 500; line-height: 1.5; color: var(--muted); margin: 0 }
+        .byline {
+            margin-top: auto; padding-top: 10px; border-top: 1px solid var(--hair);
+            font-size: 9.5px; letter-spacing: .04em; color: var(--muted); line-height: 1.7;
+        }
+        .byline strong { color: var(--ink); font-weight: 700; display: block }
+        #header .intro { font-size: 11px; line-height: 1.8; margin: 0 0 9px }
+        #header .intro:last-of-type { margin-bottom: 0 }
+        .scrollcue {
+            display: flex; align-items: center; gap: 8px; margin-top: 12px;
+            font-size: 9px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted);
+        }
+        .scrollcue .line {
+            display: block; width: 30px; height: 1px; background: var(--muted); opacity: .6;
+            animation: slide 3.6s ease-in-out infinite;
+        }
+        @keyframes slide {
+            0%, 100% { transform: translateX(0); opacity: .3 }
+            50% { transform: translateX(10px); opacity: .8 }
+        }
+
+        /* ---------- chapters ---------- */
+        .step .panel { width: var(--card-w) }
+        .step .num {
+            font-size: 9px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase;
+            color: var(--accent); margin: 0 0 7px;
+        }
+        .step h3 {
+            font-family: 'Instrument Serif', Georgia, serif; font-weight: 400;
+            font-size: 17px; line-height: 1.18; color: var(--ink); margin: 0;
+        }
+         .step .sub {
+            font-size: 10.5px; line-height: 1.5; color: var(--muted);
+            margin: 6px 0 0; letter-spacing: .01em;
+        }
+        .step p { font-size: 11.5px; line-height: 1.68; margin: 0 0 9px }
+        .step p:last-child { margin-bottom: 0 }
+
+        a, a:visited {
+            color: var(--accent); text-decoration: none;
+            border-bottom: 1px solid rgba(180, 71, 42, .4);
+        }
+        a:hover { border-bottom-color: var(--accent) }
+
+        /* ---------- legend: coloured dot + label ---------- */
+        .legend { margin-top: auto; padding-top: 9px; border-top: 1px solid var(--hair) }
+        .legend .cap {
+            font-size: 8px; letter-spacing: .14em; text-transform: uppercase;
+            color: var(--muted); margin: 0 0 6px;
+        }
+        .sw { display: flex; align-items: center; gap: 7px; font-size: 10px; margin-bottom: 4px; line-height: 1.35 }
+        .sw:last-child { margin-bottom: 0 }
+        .sw i {
+            width: 9px; height: 9px; border-radius: 50%;
+            display: inline-block; flex: 0 0 auto;
+            box-shadow: 0 0 0 1px rgba(22, 24, 26, .12) inset;
+        }
+
+        /* ============ IMAGE CONTAINER — layout: 'row' (default) ============ */
+        .img-container .panel {
+            grid-template-columns: minmax(118px, .62fr) 1fr;
+            min-height: var(--card-h-img);
+            max-height: 38vh;
+        }
+        .img-container .imgs {
+            display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+            gap: 12px; min-width: 0;
+            padding-left: 22px; border-left: 1px solid var(--hair);
+        }
+        .img-container figure { margin: 0; display: flex; flex-direction: column; min-width: 0; min-height: 0 }
+        .img-container figure img,
+        .img-container figure .box {
+            display: block; width: 100%; flex: 1 1 auto; min-height: 0;
+            object-fit: cover; object-position: center;
+            border: 1px solid var(--hair); background: rgba(22, 24, 26, .05);
+        }
+        .img-container figure .box {
+            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+            border-style: dashed; border-color: rgba(22, 24, 26, .25);
+            font-size: 8px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted);
+        }
+        .img-container figure .box code {
+            font-family: ui-monospace, Menlo, monospace; font-size: 8px; letter-spacing: 0;
+            text-transform: none; color: rgba(22, 24, 26, .38);
+        }
+        .img-container figcaption {
+            margin-top: 6px; font-size: 9px; line-height: 1.45; color: var(--muted); flex: 0 0 auto;
+        }
+
+        /* ============ layout: 'strip' — scrollable filmstrip ============ */
+        .striparea { position: relative; min-width: 0; padding-left: 22px; border-left: 1px solid var(--hair) }
+        .filmstrip {
+            display: flex; gap: 10px; height: 100%; overflow-x: auto;
+            scroll-behavior: smooth; scrollbar-width: none; -ms-overflow-style: none;
+        }
+        .filmstrip::-webkit-scrollbar { display: none }
+        .filmstrip figure { flex: 0 0 150px }
+
+        .fade {
+            position: absolute; top: 0; bottom: 0; width: 54px; pointer-events: none;
+            opacity: 0; transition: opacity .3s ease; z-index: 2;
+        }
+        .fade.l { left: 22px; background: linear-gradient(90deg, rgba(252, 252, 250, .95), rgba(252, 252, 250, 0)) }
+        .fade.r { right: 0; background: linear-gradient(270deg, rgba(252, 252, 250, .95), rgba(252, 252, 250, 0)) }
+        .fade.on { opacity: 1 }
+
+        .arrow {
+            position: absolute; top: calc(50% - 26px); z-index: 3;
+            width: 26px; height: 26px; border-radius: 50%;
+            border: 1px solid var(--hair); background: rgba(252, 252, 250, .94); color: var(--ink);
+            display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0;
+            box-shadow: 0 2px 8px rgba(22, 24, 26, .14);
+            opacity: 0; transition: opacity .3s ease, transform .2s ease;
+        }
+        .arrow.on { opacity: 1 }
+        .arrow:hover { transform: scale(1.08) }
+        .arrow.l { left: 28px }
+        .arrow.r { right: 6px }
+        .arrow svg { width: 11px; height: 11px }
+
+        .counter {
+            position: absolute; right: 6px; bottom: -2px; z-index: 3;
+            font-size: 8.5px; letter-spacing: .14em; text-transform: uppercase;
+            color: var(--muted); font-variant-numeric: tabular-nums;
+        }
+
+        /* ============ layout: 'sheet' — full page grid, no panel ============ */
+        .step.sheet-step {
+            align-items: stretch; justify-content: stretch;
+            padding: 26px 26px var(--floor);
+        }
+            .sheetwrap { flex: 1 1 auto; display: flex; flex-direction: row; gap: 24px; min-width: 0; min-height: 0 }
+        
+
+        .sheetwrap .sheet {
+            flex: 1 1 auto; min-height: 0; overflow-y: auto;
+            display: grid; grid-template-columns: repeat(var(--cols, 3), 1fr);
+            grid-auto-rows: 1fr; gap: 12px; scrollbar-width: thin;
+        }
+        .sheetwrap .sheet::-webkit-scrollbar { width: 4px }
+        .sheetwrap .sheet::-webkit-scrollbar-thumb { background: rgba(22, 24, 26, .2) }
+
+        .sheetwrap figure {
+            margin: 0; position: relative; min-width: 0; min-height: 0; overflow: hidden;
+            box-shadow: 0 4px 18px rgba(22, 24, 26, .18);
+        }
+        .sheetwrap figure img,
+        .sheetwrap figure .box { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover }
+        .sheetwrap figure .box {
+            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+            border: 1px dashed rgba(22, 24, 26, .3); background: rgba(252, 252, 250, .55);
+            font-size: 8px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted);
+        }
+        .sheetwrap figure .box code {
+            font-family: ui-monospace, Menlo, monospace; font-size: 8px; letter-spacing: 0;
+            text-transform: none; color: rgba(22, 24, 26, .4);
+        }
+        .sheetwrap figcaption {
+            position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+            padding: 16px 10px 8px; font-size: 9.5px; line-height: 1.4; color: #fff;
+            background: linear-gradient(transparent, rgba(12, 14, 16, .72));
+        }
+
+        /* the rail: same height as any other chapter card, no background */
+                    .sheetwrap .rail { flex: 0 0 clamp(320px, 30vw, 440px); height: auto; display: flex; align-items: flex-end }
+
+        .sheetwrap .rail .inner {
+            width: 100%;
+            background: var(--panel);
+            background: var(--panel);
+            -webkit-backdrop-filter: blur(16px) saturate(1.1);
+            backdrop-filter: blur(16px) saturate(1.1);
+            border: 1px solid var(--hair);
+            border-top: 3px solid var(--accent);
+            box-shadow: 0 8px 28px rgba(22, 24, 26, .12);
+            padding: 18px 20px;
+            text-shadow: none;
+        }
+        .sheetwrap .rail .num { font-size: 9.5px; margin: 0 0 6px }
+        .sheetwrap .rail h3 { font-size: 22px; margin: 0 0 8px }
+        .sheetwrap .rail .setcap { font-size: 11px; line-height: 1.6; color: #2B2E31; margin: 0; max-width: 40ch }
+        .sheetwrap .rail .legend {
+            display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+            margin-top: 11px; padding-top: 10px;
+            border-top: 1px solid rgba(22, 24, 26, .2);
+        }
+        .sheetwrap .rail .legend .cap { margin: 0 }
+        .sheetwrap .rail .sw { margin-bottom: 0; font-size: 10.5px; font-weight: 500; color: var(--ink) }
+        .sheetwrap .rail .sw i {
+            width: 10px; height: 10px;
+            box-shadow: 0 0 0 1.5px rgba(252, 252, 250, .95), 0 0 0 2.5px rgba(22, 24, 26, .18);
+        }
+
+        /* ---------- nav ---------- */
+        #nav {
+            position: fixed; top: 24px; right: 28px; z-index: 20; text-align: right;
+            text-shadow: var(--halo);
+        }
+        #nav .navcap {
+            font-size: 8.5px; letter-spacing: .18em; text-transform: uppercase;
+            color: var(--muted); margin: 0 0 7px;
+        }
+        #nav ul { list-style: none; margin: 0; padding: 0 }
+        #nav button {
+            all: unset; cursor: pointer;
+            display: grid; grid-template-columns: 1fr 20px; align-items: center;
+            column-gap: 9px; width: 100%; padding: 3.5px 0;
+            font-family: inherit; font-size: 11.5px; line-height: 1.35; color: var(--muted);
+            transition: color .4s ease;
+        }
+        #nav button .label { text-align: right }
+        #nav button .idx {
+            font-size: 8.5px; font-weight: 700; letter-spacing: .08em;
+            color: rgba(22, 24, 26, .24); text-align: right;
+            font-variant-numeric: tabular-nums; transition: color .4s ease;
+        }
+        #nav button:hover { color: var(--ink) }
+        #nav li.on button { color: var(--ink); font-weight: 700 }
+        #nav li.on button .idx { color: var(--accent) }
+
+        /* ---------- footer + progress ---------- */
+        #footer {
+            position: fixed; left: 24px; bottom: 11px; z-index: 20; max-width: 32vw;
+            font-size: 9.5px; line-height: 1.7; color: var(--muted); letter-spacing: .03em;
+            text-shadow: 0 0 6px rgba(252, 252, 250, .95);
+        }
+        #footer p { margin: 0 }
+        #footer a, #footer a:visited {
+            color: var(--muted); border-bottom: 0;
+            text-decoration: underline; text-underline-offset: 3px;
+        }
+
+        #progress {
+            position: fixed; left: 0; bottom: 0; height: 2px; width: 0;
+            background: var(--accent); z-index: 21; opacity: .85;
+            transition: width 1.05s var(--ease);
+        }
+
+        @media (max-width: 900px) {
+            :root { --card-w: 86vw; --card-h: auto; --intro-w: 86vw; --floor: 46px }
+            #header, .step { padding: 0 7vw var(--floor) }
+            .panel, #header .panel, .img-container .panel {
+                grid-template-columns: 1fr; row-gap: 10px; max-height: 50vh; padding: 16px;
+            }
+            .panel .colA, .img-container .imgs, .striparea {
+                padding-left: 0; border-left: 0; padding-top: 10px; border-top: 1px solid var(--hair);
+            }
+            .fade.l { left: 0 }
+            .arrow.l { left: 6px }
+            .step.sheet-step { padding: 16px 16px var(--floor) }
+            .sheetwrap .sheet { grid-template-columns: repeat(2, 1fr) }
+            .sheetwrap .rail { height: auto }
+            .sheetwrap .rail .inner { width: 100% }
+            #nav { top: 12px; right: 12px }
+            #nav .navcap { display: none }
+            #nav button { font-size: 11px; padding: 3px 0 }
+            #footer { display: none }
+        }
+
+        /* Fix issue on mobile browser where scroll breaks */
+        .mapboxgl-canvas-container.mapboxgl-touch-zoom-rotate.mapboxgl-touch-drag-pan,
+        .mapboxgl-canvas-container.mapboxgl-touch-zoom-rotate.mapboxgl-touch-drag-pan .mapboxgl-canvas {
+            touch-action: unset;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="map"></div>
+    <div id="story"></div>
+
+    <script src="./config.js"></script>
+    <script>
+        var layerTypes = {
+            'fill': ['fill-opacity'],
+            'line': ['line-opacity'],
+            'circle': ['circle-opacity', 'circle-stroke-opacity'],
+            'symbol': ['icon-opacity', 'text-opacity'],
+            'raster': ['raster-opacity'],
+            'fill-extrusion': ['fill-extrusion-opacity'],
+            'heatmap': ['heatmap-opacity']
+        };
+
+        /* ---- speed dials (override in config.js) ---- */
+        var FLY_MS = config.flyDuration || 4000;
+        var SCROLL_MS = config.scrollDuration || 1300;
+
+        var mapReady = false;
+
+        function setLayerOpacity(layer) {
+            if (!mapReady) return;
+            var l = map.getLayer(layer.layer);
+            if (!l) return;
+            var paintProps = layerTypes[l.type];
+            if (!paintProps) return;
+            paintProps.forEach(function (prop) {
+                if (layer.duration) {
+                    map.setPaintProperty(layer.layer, prop + '-transition', { duration: layer.duration });
+                }
+                map.setPaintProperty(layer.layer, prop, layer.opacity, {});
+            });
+        }
+
+        /* ---- legend: [{color, label}] → coloured dots ---- */
+        function legendHTML(legend) {
+            if (!legend) return '';
+            if (typeof legend === 'string') {
+                return '<div class="legend"><p class="cap">Legend</p>' + legend + '</div>';
+            }
+            if (!legend.length) return '';
+            return '<div class="legend"><p class="cap">Legend</p>'
+                 + legend.map(function (it) {
+                       return '<div class="sw"><i style="background:' + (it.color || '#B4472A') + '"></i>'
+                            + '<span>' + (it.label || '') + '</span></div>';
+                   }).join('')
+                 + '</div>';
+        }
+
+        /* ---- one <figure> per image, placeholder when src is empty ---- */
+        function figuresHTML(record) {
+            return (record.images || []).map(function (im, n) {
+                var path = im.src || 'assets/' + record.id + '-' + (n + 1) + '.jpg';
+                return '<figure>'
+                     +   (im.src
+                            ? '<img src="' + im.src + '" alt="' + (im.caption || '') + '">'
+                            : '<div class="box"><span>image</span><code>' + path + '</code></div>')
+                     +   (im.caption ? '<figcaption>' + im.caption + '</figcaption>' : '')
+                     + '</figure>';
+            }).join('');
+        }
+
+        /* ---- split a description across the two body columns ---- */
+        function splitColumns(html) {
+            var parts = (html || '').split(/<br\s*\/?>\s*<br\s*\/?>/i)
+                                    .map(function (s) { return s.trim(); })
+                                    .filter(Boolean);
+
+            if (parts.length === 1 && parts[0].indexOf('<') === -1) {
+                var t = parts[0];
+                var sentences = t.match(/[^.!?]+[.!?]+[\s]*|[^.!?]+$/g) || [t];
+                if (sentences.length > 1) {
+                    var half = t.length / 2, run = 0, cut = 1;
+                    for (var i = 0; i < sentences.length; i++) {
+                        run += sentences[i].length;
+                        if (run >= half) { cut = i + 1; break; }
+                    }
+                    cut = Math.max(1, Math.min(sentences.length - 1, cut));
+                    parts = [sentences.slice(0, cut).join('').trim(),
+                             sentences.slice(cut).join('').trim()];
+                }
+            }
+
+            var mid = Math.ceil(parts.length / 2);
+            return [parts.slice(0, mid), parts.slice(mid)];
+        }
+
+        var story = document.getElementById('story');
+        var features = document.createElement('div');
+        features.setAttribute('id', 'features');
+
+        /* ---------------- INTRO ---------------- */
+        var header = document.createElement('div');
+        header.setAttribute('id', 'header');
+
+        var hPanel = document.createElement('div');
+        hPanel.className = 'panel';
+
+        var hLeft = document.createElement('div');
+        hLeft.className = 'left';
+        hLeft.innerHTML =
+              (config.eyebrow ? '<p class="eyebrow">' + config.eyebrow + '</p>' : '')
+            + (config.title ? '<h1>' + config.title + '</h1>' : '')
+            + (config.subtitle ? '<h2>' + config.subtitle + '</h2>' : '')
+            + (config.byline ? '<div class="byline"><strong>' + config.byline + '</strong>'
+                               + (config.bylineMeta || '') + '</div>' : '');
+
+        var hRight = document.createElement('div');
+        hRight.className = 'col colA';
+        hRight.innerHTML =
+              (config.description || []).map(function (t) { return '<p class="intro">' + t + '</p>'; }).join('')
+            + '<div class="scrollcue"><span class="line"></span>  Scroll to Enter</div>';
+
+        hPanel.appendChild(hLeft);
+        hPanel.appendChild(hRight);
+        header.appendChild(hPanel);
+        story.appendChild(header);
+
+        /* ---------------- CHAPTERS ---------------- */
+        config.chapters.forEach(function (record, i) {
+            var isImg = record.type === 'img';
+            var layout = record.layout || 'row';        // 'row' | 'strip' | 'sheet'
+            var num = record.label || ('Chapter ' + String(i + 1).padStart(2, '0'));
+
+            var container = document.createElement('div');
+            container.setAttribute('id', record.id);
+            container.classList.add('step');
+            if (record.hidden) container.classList.add('hidden');
+
+            /* ---------- C: full-page sheet, no panel ---------- */
+            if (isImg && layout === 'sheet') {
+                container.classList.add('sheet-step');
+
+                var wrap = document.createElement('div');
+                wrap.className = 'sheetwrap';
+
+                var sheet = document.createElement('div');
+                sheet.className = 'sheet';
+                sheet.style.setProperty('--cols', record.columns || 3);
+                sheet.innerHTML = figuresHTML(record);
+
+                var rail = document.createElement('div');
+                rail.className = 'rail';
+                rail.innerHTML = '<div class="inner">'
+                    + '<p class="num">' + num + '</p>'
+                    + (record.title ? '<h3>' + record.title + '</h3>' : '')
+                    + (record.setCaption ? '<p class="setcap">' + record.setCaption + '</p>' : '')
+                    + legendHTML(record.legend)
+                    + '</div>';
+
+                wrap.appendChild(sheet);
+                wrap.appendChild(rail);
+                container.appendChild(wrap);
+                features.appendChild(container);
+
+                /* inner scrolling must not advance the chapter */
+                sheet.addEventListener('wheel', function (e) { e.stopPropagation(); }, { passive: true });
+                return;
+            }
+
+            /* ---------- panel-based chapters ---------- */
+            if (isImg) container.classList.add('img-container');
+
+            var panel = document.createElement('div');
+            panel.className = 'panel';
+
+            var toggle = document.createElement('button');
+            toggle.className = 'collapse';
+            toggle.setAttribute('aria-label', 'Collapse text');
+            toggle.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                             + 'stroke-width="2.6"><path d="M15 4L7 12l8 8"/></svg>';
+            toggle.addEventListener('click', function () { panel.classList.toggle('collapsed'); });
+            panel.appendChild(toggle);
+
+            var left = document.createElement('div');
+            left.className = 'left';
+            left.innerHTML = '<p class="num">' + num + '</p>'
+                + (record.title ? '<h3>' + record.title + '</h3>' : '')
+                + (record.subtitle ? '<p class="sub">' + record.subtitle + '</p>' : '')
+                + legendHTML(record.legend);
+            panel.appendChild(left);
+
+            if (isImg && layout === 'strip') {
+                /* ---------- B: filmstrip with arrows, fades and counter ---------- */
+                var area = document.createElement('div');
+                area.className = 'striparea';
+                area.innerHTML =
+                      '<div class="fade l"></div><div class="fade r on"></div>'
+                    + '<button class="arrow l" aria-label="Previous images">'
+                    +   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 4L7 12l8 8"/></svg></button>'
+                    + '<button class="arrow r on" aria-label="More images">'
+                    +   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M9 4l8 8-8 8"/></svg></button>'
+                    + '<div class="filmstrip">' + figuresHTML(record) + '</div>'
+                    + '<span class="counter"></span>';
+                panel.appendChild(area);
+                container.appendChild(panel);
+                features.appendChild(container);
+                initStrip(area);
+                return;
+
+            } else if (isImg) {
+                /* ---------- A: simple row of images ---------- */
+                var imgs = document.createElement('div');
+                imgs.className = 'imgs';
+                imgs.innerHTML = figuresHTML(record);
+                panel.appendChild(imgs);
+
+            } else {
+                /* ---------- text chapter: two body columns ---------- */
+                var cols = splitColumns(record.description);
+
+                var colA = document.createElement('div');
+                colA.className = 'col colA';
+                colA.innerHTML = cols[0].map(function (t) { return '<p>' + t + '</p>'; }).join('');
+
+                var colB = document.createElement('div');
+                colB.className = 'col colB';
+                colB.innerHTML = cols[1].map(function (t) { return '<p>' + t + '</p>'; }).join('');
+
+                panel.appendChild(colA);
+                if (cols[1].length) {
+                    panel.appendChild(colB);
+                } else {
+                    panel.classList.add('one-col');
+                }
+            }
+
+            container.appendChild(panel);
+            features.appendChild(container);
+        });
+
+        /* ---- filmstrip behaviour: arrows, edge fades, counter ---- */
+        function initStrip(area) {
+            var strip = area.querySelector('.filmstrip');
+            var fadeL = area.querySelector('.fade.l'), fadeR = area.querySelector('.fade.r');
+            var arrowL = area.querySelector('.arrow.l'), arrowR = area.querySelector('.arrow.r');
+            var counter = area.querySelector('.counter');
+            var total = strip.children.length;
+
+            function sync() {
+                var max = strip.scrollWidth - strip.clientWidth;
+                var atStart = strip.scrollLeft < 4, atEnd = strip.scrollLeft > max - 4;
+                fadeL.classList.toggle('on', !atStart);
+                arrowL.classList.toggle('on', !atStart);
+                fadeR.classList.toggle('on', !atEnd);
+                arrowR.classList.toggle('on', !atEnd);
+
+                if (!strip.children[0]) return;
+                var w = strip.children[0].offsetWidth + 10;
+                var first = Math.round(strip.scrollLeft / w) + 1;
+                var visible = Math.max(1, Math.floor(strip.clientWidth / w));
+                counter.textContent = first + '–' + Math.min(total, first + visible - 1) + ' / ' + total;
+            }
+
+            strip.addEventListener('scroll', sync, { passive: true });
+            window.addEventListener('resize', sync);
+            arrowR.addEventListener('click', function () { strip.scrollBy({ left: strip.clientWidth * .8, behavior: 'smooth' }); });
+            arrowL.addEventListener('click', function () { strip.scrollBy({ left: -strip.clientWidth * .8, behavior: 'smooth' }); });
+            strip.addEventListener('wheel', function (e) { e.stopPropagation(); }, { passive: true });
+            setTimeout(sync, 0);
+        }
+
+        story.appendChild(features);
+
+        /* ---------------- NAV ---------------- */
+        var nav = document.createElement('nav');
+        nav.setAttribute('id', 'nav');
+        var navHTML = '<li data-target="header"><button>'
+                    + '<span class="label">Introduction</span><span class="idx"></span></button></li>';
+        var navCount = 0;
+        config.chapters.forEach(function (c, i) {
+            if (c.hidden || c.hideFromNav) return;
+            navCount++;
+            navHTML += '<li data-target="' + c.id + '"><button><span class="label">'
+                     + (c.navTitle || c.title) + '</span><span class="idx">'
+                     + String(navCount).padStart(2, '0') + '</span></button></li>';
+        });
+        nav.innerHTML = '<p class="navcap">Chapters</p><ul>' + navHTML + '</ul>';
+        document.body.appendChild(nav);
+
+        /* ---------------- FOOTER + PROGRESS ---------------- */
+        if (config.footer) {
+            var footer = document.createElement('div');
+            footer.setAttribute('id', 'footer');
+            footer.innerHTML = '<p>' + config.footer + '</p>';
+            document.body.appendChild(footer);
+        }
+        var progress = document.createElement('div');
+        progress.setAttribute('id', 'progress');
+        document.body.appendChild(progress);
+
+        /* ---------------- MAP ---------------- */
+        mapboxgl.accessToken = config.accessToken;
+
+                var startView = config.introLocation || config.chapters[0].location;
+
+        var map = new mapboxgl.Map({
+            container: 'map',
+            style: config.style,
+            center: startView.center,
+            zoom: startView.zoom,
+            bearing: startView.bearing,
+            pitch: startView.pitch,
+            interactive: false,
+            projection: config.projection
+        });
+
+        if (config.inset) {
+            map.addControl(new GlobeMinimap({ ...config.insetOptions }), config.insetPosition);
+        }
+
+        var marker = null;
+        if (config.showMarkers) {
+            marker = new mapboxgl.Marker({ color: config.markerColor });
+            marker.setLngLat(config.chapters[0].location.center).addTo(map);
+        }
+
+        /* ============ STORY ENGINE ============ */
+        var storyEl = document.getElementById('story');
+        var slots = [document.getElementById('header')].concat(
+            Array.prototype.slice.call(document.querySelectorAll('.step'))
+                .filter(function (s) { return !s.classList.contains('hidden'); })
+        );
+        var navItems = Array.prototype.slice.call(document.querySelectorAll('#nav li'));
+        var bar = document.getElementById('progress');
+
+        var idx = 0, prev = -1, raf = null;
+
+        function tweenTo(target, duration) {
+            cancelAnimationFrame(raf);
+            var start = storyEl.scrollLeft;
+            var delta = target - start;
+            if (Math.abs(delta) < 1) return;
+            var t0 = performance.now();
+            (function frame(now) {
+                var p = Math.min(1, (now - t0) / duration);
+                var e = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+                storyEl.scrollLeft = start + delta * e;
+                if (p < 1) raf = requestAnimationFrame(frame);
+            })(performance.now());
+        }
+
+        function applyMap() {
+            if (!mapReady) return;
+
+            if (prev !== -1 && prev !== idx) {
+                var pc = config.chapters.find(function (c) { return c.id === slots[prev].id; });
+                if (pc && (pc.onChapterExit || []).length > 0) pc.onChapterExit.forEach(setLayerOpacity);
+            }
+
+            var ch = config.chapters.find(function (c) { return c.id === slots[idx].id; });
+            if (ch) {
+                var flight = Object.assign({}, ch.location, { duration: ch.flyDuration || FLY_MS });
+                delete flight.speed;
+                delete flight.curve;
+                map[ch.mapAnimation || 'flyTo'](flight);
+
+                if (marker) marker.setLngLat(ch.location.center);
+                if ((ch.onChapterEnter || []).length > 0) ch.onChapterEnter.forEach(setLayerOpacity);
+                if (ch.callback && typeof window[ch.callback] === 'function') window[ch.callback]();
+                if (ch.rotateAnimation) {
+                    map.once('moveend', function () {
+                        map.rotateTo(map.getBearing() + 180, {
+                            duration: 45000, easing: function (t) { return t; }
+                        });
+                    });
+                }
+            } else if (config.introLocation) {
+                map.flyTo(Object.assign({}, config.introLocation, { duration: FLY_MS }));
+            }
+            prev = idx;
+        }
+
+        function render() {
+            slots.forEach(function (s, i) { s.classList.toggle('active', i === idx); });
+            navItems.forEach(function (li) {
+                li.classList.toggle('on', li.dataset.target === slots[idx].id);
+            });
+            bar.style.width = (idx / (slots.length - 1)) * 100 + '%';
+            applyMap();
+        }
+
+        function goTo(i) {
+            i = Math.max(0, Math.min(slots.length - 1, i));
+            if (i === idx) return;
+            idx = i;
+            tweenTo(slots[idx].offsetLeft, SCROLL_MS);
+            render();
+        }
+
+        /* ---- gestures: accumulator, not a hard lock, so reversing works ---- */
+        var acc = 0, lastWheel = 0, lastFire = 0, lastDir = 0;
+        var THRESHOLD = 80;
+        var COOLDOWN = SCROLL_MS * 0.7;
+
+        storyEl.addEventListener('wheel', function (e) {
+            e.preventDefault();
+            var d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+            if (!d) return;
+
+            var now = performance.now();
+            var dir = d > 0 ? 1 : -1;
+
+            if (now - lastWheel > 180) acc = 0;
+            if (dir !== lastDir) acc = 0;
+            lastWheel = now;
+            lastDir = dir;
+
+            if (now - lastFire < COOLDOWN) return;
+
+            acc += d;
+            if (Math.abs(acc) < THRESHOLD) return;
+
+            acc = 0;
+            lastFire = now;
+            goTo(idx + dir);
+        }, { passive: false });
+
+        var tx = 0, ty = 0;
+        storyEl.addEventListener('touchstart', function (e) {
+            tx = e.changedTouches[0].clientX;
+            ty = e.changedTouches[0].clientY;
+        }, { passive: true });
+
+        storyEl.addEventListener('touchend', function (e) {
+            var dx = e.changedTouches[0].clientX - tx;
+            var dy = e.changedTouches[0].clientY - ty;
+            var horiz = Math.abs(dx) >= Math.abs(dy);
+            var move = horiz ? dx : dy;
+            if (Math.abs(move) < 45) return;
+            if (performance.now() - lastFire < COOLDOWN) return;
+            lastFire = performance.now();
+            goTo(idx + (move < 0 ? 1 : -1));
+        }, { passive: true });
+
+        window.addEventListener('keydown', function (e) {
+            if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'PageDown') goTo(idx + 1);
+            if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp') goTo(idx - 1);
+        });
+
+        navItems.forEach(function (li) {
+            li.querySelector('button').addEventListener('click', function () {
+                goTo(slots.findIndex(function (s) { return s.id === li.dataset.target; }));
+            });
+        });
+
+        window.addEventListener('resize', function () {
+            cancelAnimationFrame(raf);
+            storyEl.scrollLeft = slots[idx].offsetLeft;
+        });
+
+        render();
+
+        if (config.auto) {
+            setInterval(function () { goTo((idx + 1) % slots.length); }, 9000);
+        }
+
+        /* ---------------- MAP READY ---------------- */
+        map.on('load', function () {
+            if (config.use3dTerrain) {
+                map.addSource('mapbox-dem', {
+                    'type': 'raster-dem',
+                    'url': 'mapbox://mapbox.mapbox-terrain-dem-v1',
+                    'tileSize': 512,
+                    'maxzoom': 14
+                });
+                map.setTerrain({ 'source': 'mapbox-dem', 'exaggeration': 1.5 });
+                map.addLayer({
+                    'id': 'sky',
+                    'type': 'sky',
+                    'paint': {
+                        'sky-type': 'atmosphere',
+                        'sky-atmosphere-sun': [0.0, 0.0],
+                        'sky-atmosphere-sun-intensity': 15
+                    }
+                });
+            }
+            mapReady = true;
+            applyMap();
+        });
+
+        map.on('error', function (e) {
+            console.error('Mapbox error:', e && e.error ? e.error.message : e);
+        });
+    </script>
+
+</body>
+
+</html>
